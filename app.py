@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import unicodedata
 import re
+import difflib
 
 # Page Config
 st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", page_icon="⚾")
@@ -15,8 +16,7 @@ def clean_name_string(name):
     if not isinstance(name, str):
         return str(name)
     
-    # 1. Standardize common baseball-specific character variations before normalization
-    # Specifically replacing 'ñ' with 'n' manually because some normalization paths miss it
+    # 1. Standardize common baseball-specific character variations
     name = name.replace('ñ', 'n').replace('Ñ', 'n')
     
     # 2. Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn)
@@ -26,22 +26,18 @@ def clean_name_string(name):
     # 3. Convert to lowercase and strip whitespace
     name = name.lower().strip()
     
-    # 4. Remove punctuation (like periods in C.J., hyphens, and commas)
+    # 4. Remove punctuation
     name = re.sub(r'[.\-,\']', '', name)
     
-    # 5. Remove common suffixes (Jr, Sr, II, III, IV, V)
-    # This regex looks for these suffixes at the end of words or strings
-    # Added extra patterns to catch suffixes with and without periods or trailing spaces
+    # 5. Remove common suffixes
     suffixes = [r'\bjr\b', r'\bsr\b', r'\bii\b', r'\biii\b', r'\biv\b', r'\bv\b']
     for suffix in suffixes:
         name = re.sub(suffix, '', name)
     
-    # 6. Final strip to clean up any double spaces left behind by suffix removal
     return " ".join(name.split())
 
 # --- Sidebar: Data Selection & Scoring ---
 st.sidebar.header("1. Data Selection")
-# Toggle between 2025 and 2026 data
 data_year = st.sidebar.radio("Select Season Data", ["2026 Projections", "2025 Actuals"])
 file_to_load = 'MLB_Batters_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Batters_2025.xlsx'
 
@@ -55,11 +51,10 @@ with st.sidebar.expander("Adjust Point Weights"):
     w_xbh = st.number_input("Extra Base Hits (XBH)", value=1)
     w_so = st.number_input("Strikeouts (K/SO)", value=-1)
 
-# Load Reference Data (to recover missing positions)
+# Load Reference Data
 @st.cache_data
 def load_reference_data():
     try:
-        # We always use 2025 as the source of truth for positions if needed
         ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
         
@@ -67,11 +62,13 @@ def load_reference_data():
         pos_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'pos']), None)
         
         if name_col and pos_col:
-            # Map cleaned names to positions
-            return {clean_name_string(name): str(pos).strip() for name, pos in zip(ref_df[name_col], ref_df[pos_col])}
-        return {}
+            # We store two things: the clean name map AND the original names for fuzzy search
+            pos_dict = {clean_name_string(name): str(pos).strip() for name, pos in zip(ref_df[name_col], ref_df[pos_col])}
+            clean_to_orig = {clean_name_string(name): name for name in ref_df[name_col]}
+            return pos_dict, clean_to_orig
+        return {}, {}
     except:
-        return {}
+        return {}, {}
 
 # Load and process data
 @st.cache_data
@@ -80,7 +77,8 @@ def load_data(filename, _weights):
         df = pd.read_excel(filename)
         df.columns = [str(c).strip() for c in df.columns]
         
-        pos_map = load_reference_data()
+        pos_map, clean_to_orig = load_reference_data()
+        all_clean_ref_names = list(pos_map.keys())
         
         # Find the 'Name' column
         name_col = next((c for c in df.columns if c.lower() == 'name'), None)
@@ -94,15 +92,23 @@ def load_data(filename, _weights):
         if current_pos_col:
             df = df.rename(columns={current_pos_col: 'Positions'})
         else:
-            # Apply clean_name_string to match against the reference map
-            df['Positions'] = df['Name'].apply(lambda x: pos_map.get(clean_name_string(x), 'Util'))
+            def get_fuzzy_pos(name):
+                clean_n = clean_name_string(name)
+                # 1. Try exact clean match
+                if clean_n in pos_map:
+                    return pos_map[clean_n]
+                
+                # 2. Try fuzzy match if exact fails
+                matches = difflib.get_close_matches(clean_n, all_clean_ref_names, n=1, cutoff=0.85)
+                if matches:
+                    return pos_map[matches[0]]
+                
+                return 'Util'
+            
+            df['Positions'] = df['Name'].apply(get_fuzzy_pos)
 
-        # Ensure numeric columns exist
-        stat_mapping = {
-            'R': 'R', 'RBI': 'RBI', 'SB': 'SB', 'BB': 'BB', 
-            'TB': 'TB', 'XBH': 'XBH', 'SO': 'SO', 'K': 'SO'
-        }
-        
+        # Stat handling...
+        stat_mapping = {'R': 'R', 'RBI': 'RBI', 'SB': 'SB', 'BB': 'BB', 'TB': 'TB', 'XBH': 'XBH', 'SO': 'SO', 'K': 'SO'}
         for std_name, target in stat_mapping.items():
             found_col = next((c for c in df.columns if c.upper() == std_name or c.upper() == target), None)
             if found_col:
@@ -110,16 +116,8 @@ def load_data(filename, _weights):
             elif target not in df.columns:
                 df[target] = 0
         
-        # Calculate Fantasy Points
-        df['FantasyPoints'] = (
-            (df['R'] * _weights['r']) + 
-            (df['RBI'] * _weights['rbi']) + 
-            (df['SB'] * _weights['sb']) + 
-            (df['BB'] * _weights['bb']) + 
-            (df['TB'] * _weights['tb']) + 
-            (df['XBH'] * _weights['xbh']) +
-            (df['SO'] * _weights['so'])
-        )
+        df['FantasyPoints'] = ((df['R'] * _weights['r']) + (df['RBI'] * _weights['rbi']) + (df['SB'] * _weights['sb']) + 
+                               (df['BB'] * _weights['bb']) + (df['TB'] * _weights['tb']) + (df['XBH'] * _weights['xbh']) + (df['SO'] * _weights['so']))
         
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
         return df
@@ -127,37 +125,23 @@ def load_data(filename, _weights):
         st.error(f"Error processing {filename}: {e}")
         return pd.DataFrame()
 
-# Package weights for the cached function
-current_weights = {
-    'r': w_r, 'rbi': w_rbi, 'sb': w_sb, 'bb': w_bb, 
-    'tb': w_tb, 'xbh': w_xbh, 'so': w_so
-}
-
+current_weights = {'r': w_r, 'rbi': w_rbi, 'sb': w_sb, 'bb': w_bb, 'tb': w_tb, 'xbh': w_xbh, 'so': w_so}
 df = load_data(file_to_load, current_weights)
 
 if not df.empty:
-    # --- Sidebar: Draft Controls ---
     st.sidebar.header("3. Draft Controls")
     search_query = st.sidebar.text_input("🔍 Search Player")
-    league_positions = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
-    selected_pos = st.sidebar.selectbox("📂 Position Filter", league_positions)
+    selected_pos = st.sidebar.selectbox("📂 Position Filter", ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util'])
     hide_drafted = st.sidebar.checkbox("Hide Drafted Players", value=True)
 
-    # --- Filtering Logic ---
     filtered_df = df.copy()
-
     if selected_pos != 'All':
         def filter_positions(pos_str):
             player_pos_list = [p.strip() for p in str(pos_str).split(',')]
-            if selected_pos == 'IF':
-                return any(p in ['1B', '2B', '3B', 'SS'] for p in player_pos_list)
-            elif selected_pos == 'Util':
-                return True
-            else:
-                return selected_pos in player_pos_list
-        
-        mask = filtered_df['Positions'].apply(filter_positions)
-        filtered_df = filtered_df[mask]
+            if selected_pos == 'IF': return any(p in ['1B', '2B', '3B', 'SS'] for p in player_pos_list)
+            if selected_pos == 'Util': return True
+            return selected_pos in player_pos_list
+        filtered_df = filtered_df[filtered_df['Positions'].apply(filter_positions)]
 
     if search_query:
         filtered_df = filtered_df[filtered_df['Name'].str.contains(search_query, case=False)]
@@ -170,34 +154,19 @@ if not df.empty:
     available_df = available_df.sort_values(by='FantasyPoints', ascending=False).reset_index(drop=True)
     available_df['Rank'] = available_df.index + 1
 
-    # --- Main UI ---
     st.title(f"⚾ {data_year} Draft Board")
     col1, col2 = st.columns([3, 1])
-
     with col1:
         st.subheader(f"Available Players: {selected_pos}")
-        cols_to_show = ['Rank', 'Name', 'Positions', 'FantasyPoints', 'R', 'RBI', 'SB', 'BB', 'SO', 'TB', 'XBH']
-        st.dataframe(available_df[cols_to_show], use_container_width=True, hide_index=True)
-
+        st.dataframe(available_df[['Rank', 'Name', 'Positions', 'FantasyPoints', 'R', 'RBI', 'SB', 'BB', 'SO', 'TB', 'XBH']], use_container_width=True, hide_index=True)
     with col2:
         st.subheader("Draft Player")
-        player_list = [""] + available_df['ID'].tolist()
-        player_to_draft = st.selectbox("Select to mark as Drafted", player_list)
-        
+        player_to_draft = st.selectbox("Select Player", [""] + available_df['ID'].tolist())
         if st.button("Mark as Drafted") and player_to_draft != "":
-            if player_to_draft not in st.session_state.drafted:
-                st.session_state.drafted.append(player_to_draft)
-                st.rerun()
-
-        st.markdown("---")
-        st.write(f"**Drafted Count:** {len(st.session_state.drafted)}")
-        if st.button("Reset Draft Board"):
+            st.session_state.drafted.append(player_to_draft)
+            st.rerun()
+        if st.button("Reset Draft"):
             st.session_state.drafted = []
             st.rerun()
-
-    if st.session_state.drafted:
-        with st.expander("View Drafted Players List"):
-            for p in st.session_state.drafted:
-                st.write(f"✅ {p}")
 else:
-    st.info(f"Please ensure '{file_to_load}' is uploaded to your GitHub repository.")
+    st.info(f"Please ensure '{file_to_load}' is in your GitHub repository.")
