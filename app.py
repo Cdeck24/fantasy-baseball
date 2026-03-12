@@ -26,9 +26,18 @@ with st.sidebar.expander("Adjust Point Weights"):
 @st.cache_data
 def load_reference_data():
     try:
-        # We use the original 2025 file as a dictionary for positions
+        # Load the reference file
         ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
-        return dict(zip(ref_df['Name'], ref_df['Positions']))
+        # Clean reference columns
+        ref_df.columns = [str(c).strip() for c in ref_df.columns]
+        
+        # Look for Name and Position columns in reference
+        name_col = next((c for c in ref_df.columns if c.lower() == 'name'), None)
+        pos_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'pos']), None)
+        
+        if name_col and pos_col:
+            return dict(zip(ref_df[name_col], ref_df[pos_col]))
+        return {}
     except:
         return {}
 
@@ -37,21 +46,41 @@ def load_reference_data():
 def load_data(file):
     try:
         df = pd.read_excel(file)
+        # Clean column names (remove leading/trailing spaces)
+        df.columns = [str(c).strip() for c in df.columns]
+        
         pos_map = load_reference_data()
         
-        # --- POSITION RECOVERY LOGIC ---
-        if 'Positions' not in df.columns and 'Pos' not in df.columns:
-            st.info("No position column found in new file. Attempting to recover positions from 2025 data...")
-            # Map positions from the 2025 reference based on Name
-            df['Positions'] = df['Name'].map(pos_map).fillna('Util')
-        elif 'Pos' in df.columns:
-            df = df.rename(columns={'Pos': 'Positions'})
+        # Find the 'Name' column (case-insensitive)
+        name_col = next((c for c in df.columns if c.lower() == 'name'), None)
+        if not name_col:
+            st.error("Could not find a 'Name' column in the uploaded file.")
+            return pd.DataFrame()
+        
+        # Rename it to standard 'Name'
+        df = df.rename(columns={name_col: 'Name'})
 
-        # Ensure numeric columns exist
-        required_stats = ['R', 'RBI', 'SB', 'BB', 'TB', 'XBH', 'SO']
-        for stat in required_stats:
-            if stat not in df.columns:
-                df[stat] = 0
+        # Find or Recover Position column
+        current_pos_col = next((c for c in df.columns if c.lower() in ['positions', 'pos']), None)
+        
+        if current_pos_col:
+            df = df.rename(columns={current_pos_col: 'Positions'})
+        else:
+            st.info("No position column found. Attempting to recover from 2025 reference data...")
+            df['Positions'] = df['Name'].map(pos_map).fillna('Util')
+
+        # Ensure numeric columns exist (case-insensitive check)
+        stat_mapping = {
+            'R': 'R', 'RBI': 'RBI', 'SB': 'SB', 'BB': 'BB', 
+            'TB': 'TB', 'XBH': 'XBH', 'SO': 'SO', 'K': 'SO'
+        }
+        
+        for std_name, target in stat_mapping.items():
+            found_col = next((c for c in df.columns if c.upper() == std_name or c.upper() == target), None)
+            if found_col:
+                df[target] = pd.to_numeric(df[found_col], errors='coerce').fillna(0)
+            elif target not in df.columns:
+                df[target] = 0
         
         # Calculate Fantasy Points
         df['FantasyPoints'] = (
@@ -64,6 +93,7 @@ def load_data(file):
             (df['SO'] * w_so)
         )
         
+        # Final ID creation for the draft logic
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
         return df
     except Exception as e:
