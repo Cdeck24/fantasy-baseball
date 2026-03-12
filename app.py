@@ -8,9 +8,11 @@ st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", pag
 if 'drafted' not in st.session_state:
     st.session_state.drafted = []
 
-# --- Sidebar: Configuration & Scoring ---
-st.sidebar.header("1. Upload Projections")
-uploaded_file = st.sidebar.file_uploader("Upload your 2026 Excel Projections", type=["xlsx"])
+# --- Sidebar: Data Selection & Scoring ---
+st.sidebar.header("1. Data Selection")
+# Toggle between 2025 and 2026 data
+data_year = st.sidebar.radio("Select Season Data", ["2026 Projections", "2025 Actuals"])
+file_to_load = 'MLB_Batters_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Batters_2025.xlsx'
 
 st.sidebar.header("2. Scoring Settings")
 with st.sidebar.expander("Adjust Point Weights"):
@@ -26,15 +28,11 @@ with st.sidebar.expander("Adjust Point Weights"):
 @st.cache_data
 def load_reference_data():
     try:
-        # Load the reference file
+        # We always use 2025 as the source of truth for positions if needed
         ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
-        # Clean reference columns
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
-        
-        # Look for Name and Position columns in reference
         name_col = next((c for c in ref_df.columns if c.lower() == 'name'), None)
         pos_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'pos']), None)
-        
         if name_col and pos_col:
             return dict(zip(ref_df[name_col], ref_df[pos_col]))
         return {}
@@ -43,33 +41,28 @@ def load_reference_data():
 
 # Load and process data
 @st.cache_data
-def load_data(file):
+def load_data(filename, _weights):
     try:
-        df = pd.read_excel(file)
-        # Clean column names (remove leading/trailing spaces)
+        df = pd.read_excel(filename)
         df.columns = [str(c).strip() for c in df.columns]
         
         pos_map = load_reference_data()
         
-        # Find the 'Name' column (case-insensitive)
+        # Find the 'Name' column
         name_col = next((c for c in df.columns if c.lower() == 'name'), None)
         if not name_col:
-            st.error("Could not find a 'Name' column in the uploaded file.")
+            st.error(f"Could not find a 'Name' column in {filename}.")
             return pd.DataFrame()
-        
-        # Rename it to standard 'Name'
         df = df.rename(columns={name_col: 'Name'})
 
         # Find or Recover Position column
         current_pos_col = next((c for c in df.columns if c.lower() in ['positions', 'pos']), None)
-        
         if current_pos_col:
             df = df.rename(columns={current_pos_col: 'Positions'})
         else:
-            st.info("No position column found. Attempting to recover from 2025 reference data...")
             df['Positions'] = df['Name'].map(pos_map).fillna('Util')
 
-        # Ensure numeric columns exist (case-insensitive check)
+        # Ensure numeric columns exist
         stat_mapping = {
             'R': 'R', 'RBI': 'RBI', 'SB': 'SB', 'BB': 'BB', 
             'TB': 'TB', 'XBH': 'XBH', 'SO': 'SO', 'K': 'SO'
@@ -84,29 +77,28 @@ def load_data(file):
         
         # Calculate Fantasy Points
         df['FantasyPoints'] = (
-            (df['R'] * w_r) + 
-            (df['RBI'] * w_rbi) + 
-            (df['SB'] * w_sb) + 
-            (df['BB'] * w_bb) + 
-            (df['TB'] * w_tb) + 
-            (df['XBH'] * w_xbh) +
-            (df['SO'] * w_so)
+            (df['R'] * _weights['r']) + 
+            (df['RBI'] * _weights['rbi']) + 
+            (df['SB'] * _weights['sb']) + 
+            (df['BB'] * _weights['bb']) + 
+            (df['TB'] * _weights['tb']) + 
+            (df['XBH'] * _weights['xbh']) +
+            (df['SO'] * _weights['so'])
         )
         
-        # Final ID creation for the draft logic
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
         return df
     except Exception as e:
-        st.error(f"Error processing file: {e}")
+        st.error(f"Error processing {filename}: {e}")
         return pd.DataFrame()
 
-# Check for file
-if uploaded_file is not None:
-    df = load_data(uploaded_file)
-else:
-    st.title("⚾ Fantasy Baseball Draft Board")
-    st.info("Please upload your 2026 projections Excel file in the sidebar to get started.")
-    st.stop()
+# Package weights for the cached function
+current_weights = {
+    'r': w_r, 'rbi': w_rbi, 'sb': w_sb, 'bb': w_bb, 
+    'tb': w_tb, 'xbh': w_xbh, 'so': w_so
+}
+
+df = load_data(file_to_load, current_weights)
 
 if not df.empty:
     # --- Sidebar: Draft Controls ---
@@ -144,7 +136,7 @@ if not df.empty:
     available_df['Rank'] = available_df.index + 1
 
     # --- Main UI ---
-    st.title("⚾ 2026 Fantasy Baseball Draft Board")
+    st.title(f"⚾ {data_year} Draft Board")
     col1, col2 = st.columns([3, 1])
 
     with col1:
@@ -172,3 +164,5 @@ if not df.empty:
         with st.expander("View Drafted Players List"):
             for p in st.session_state.drafted:
                 st.write(f"✅ {p}")
+else:
+    st.info(f"Please ensure '{file_to_load}' is uploaded to your GitHub repository.")
