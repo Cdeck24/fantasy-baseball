@@ -2,48 +2,68 @@ import streamlit as st
 import pandas as pd
 
 # Page Config
-st.set_page_config(page_title="2025 Fantasy Draft Board", layout="wide", page_icon="⚾")
+st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", page_icon="⚾")
 
 # Initialize Session State for Drafted Players
 if 'drafted' not in st.session_state:
     st.session_state.drafted = []
 
+# --- Sidebar: Configuration & Scoring ---
+st.sidebar.header("1. Upload Projections")
+uploaded_file = st.sidebar.file_uploader("Upload your 2026 Excel Projections", type=["xlsx"])
+
+st.sidebar.header("2. Scoring Settings")
+with st.sidebar.expander("Adjust Point Weights"):
+    w_r = st.number_input("Runs (R)", value=1)
+    w_rbi = st.number_input("RBI", value=1)
+    w_sb = st.number_input("Stolen Bases (SB)", value=1)
+    w_bb = st.number_input("Walks (BB)", value=1)
+    w_tb = st.number_input("Total Bases (TB)", value=1)
+    w_xbh = st.number_input("Extra Base Hits (XBH)", value=1)
+    w_so = st.number_input("Strikeouts (K/SO)", value=-1)
+
 # Load and process data
 @st.cache_data
-def load_data():
+def load_data(file):
     try:
-        # Load the Excel file (requires openpyxl in requirements.txt)
-        df = pd.read_excel('MLB_Batters_2025.xlsx')
+        # Load the uploaded file
+        df = pd.read_excel(file)
         
-        # Calculate Fantasy Points based on custom scoring
-        # Points = (R + RBI + SB + BB + TB + XBH) - SO
+        # Calculate Fantasy Points based on dynamic weights
         df['FantasyPoints'] = (
-            df['R'] + df['RBI'] + df['SB'] + 
-            df['BB'] + df['TB'] + df['XBH']
-        ) - df['SO']
+            (df['R'] * w_r) + 
+            (df['RBI'] * w_rbi) + 
+            (df['SB'] * w_sb) + 
+            (df['BB'] * w_bb) + 
+            (df['TB'] * w_tb) + 
+            (df['XBH'] * w_xbh) +
+            (df['SO'] * w_so)
+        )
         
         # Ensure name uniqueness for drafting logic
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
         
         return df
     except Exception as e:
-        st.error(f"Error loading Excel file: {e}")
-        st.info("Make sure 'openpyxl' is installed and the file is a valid .xlsx file.")
+        st.error(f"Error processing file: {e}")
         return pd.DataFrame()
 
-df = load_data()
+# Check for file
+if uploaded_file is not None:
+    df = load_data(uploaded_file)
+else:
+    st.title("⚾ Fantasy Baseball Draft Board")
+    st.info("Please upload your 2026 projections Excel file in the sidebar to get started.")
+    st.stop()
 
 if not df.empty:
-    # --- Sidebar ---
-    st.sidebar.header("Draft Controls")
+    # --- Sidebar: Draft Controls ---
+    st.sidebar.header("3. Draft Controls")
     
     # Search functionality
     search_query = st.sidebar.text_input("🔍 Search Player")
     
-    # Position mapping for specific league requirements
-    # IF = 1B, 2B, 3B, SS
-    # Util = Anyone
-    # OF = OF
+    # Position mapping
     league_positions = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
     selected_pos = st.sidebar.selectbox("📂 Position Filter", league_positions)
     
@@ -58,13 +78,10 @@ if not df.empty:
         def filter_positions(pos_str):
             player_pos_list = [p.strip() for p in str(pos_str).split(',')]
             if selected_pos == 'IF':
-                # Match any infielder
                 return any(p in ['1B', '2B', '3B', 'SS'] for p in player_pos_list)
             elif selected_pos == 'Util':
-                # Everyone qualifies for Util
                 return True
             else:
-                # Standard check for C, 1B, 2B, 3B, SS, or OF
                 return selected_pos in player_pos_list
         
         mask = filtered_df['Positions'].apply(filter_positions)
@@ -85,7 +102,7 @@ if not df.empty:
     available_df['Rank'] = available_df.index + 1
 
     # --- Main UI ---
-    st.title("⚾ 2025 Fantasy Baseball Draft Board")
+    st.title("⚾ 2026 Fantasy Baseball Draft Board")
     
     col1, col2 = st.columns([3, 1])
 
@@ -122,6 +139,3 @@ if not df.empty:
         with st.expander("View Drafted Players List"):
             for p in st.session_state.drafted:
                 st.write(f"✅ {p}")
-
-else:
-    st.info("Please ensure 'MLB_Batters_2025.xlsx' is in the same folder as this script.")
