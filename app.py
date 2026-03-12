@@ -16,17 +16,18 @@ def clean_name_string(name):
         return str(name)
     
     # 1. Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn) to remove accents
+    # This specifically targets characters like 'ñ' and 'é'
     normalized = unicodedata.normalize('NFD', name)
     name = "".join(c for c in normalized if unicodedata.category(c) != 'Mn')
     
     # 2. Convert to lowercase and strip whitespace
     name = name.lower().strip()
     
-    # 3. Remove punctuation (like periods in C.J. or hyphens)
-    name = re.sub(r'[.\-]', '', name)
+    # 3. Remove punctuation (like periods in C.J., hyphens, and commas before suffixes)
+    name = re.sub(r'[.\-,\']', '', name)
     
     # 4. Remove common suffixes (Jr, Sr, II, III, IV, V)
-    # We look for these as standalone words at the end of the string
+    # Using \b to match word boundaries ensures we don't accidentally strip names ending in these letters
     suffixes = [r'\bjr\b', r'\bsr\b', r'\bii\b', r'\biii\b', r'\biv\b', r'\bv\b']
     for suffix in suffixes:
         name = re.sub(suffix, '', name)
