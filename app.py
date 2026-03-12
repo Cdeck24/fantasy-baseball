@@ -22,14 +22,38 @@ with st.sidebar.expander("Adjust Point Weights"):
     w_xbh = st.number_input("Extra Base Hits (XBH)", value=1)
     w_so = st.number_input("Strikeouts (K/SO)", value=-1)
 
+# Load Reference Data (to recover missing positions)
+@st.cache_data
+def load_reference_data():
+    try:
+        # We use the original 2025 file as a dictionary for positions
+        ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
+        return dict(zip(ref_df['Name'], ref_df['Positions']))
+    except:
+        return {}
+
 # Load and process data
 @st.cache_data
 def load_data(file):
     try:
-        # Load the uploaded file
         df = pd.read_excel(file)
+        pos_map = load_reference_data()
         
-        # Calculate Fantasy Points based on dynamic weights
+        # --- POSITION RECOVERY LOGIC ---
+        if 'Positions' not in df.columns and 'Pos' not in df.columns:
+            st.info("No position column found in new file. Attempting to recover positions from 2025 data...")
+            # Map positions from the 2025 reference based on Name
+            df['Positions'] = df['Name'].map(pos_map).fillna('Util')
+        elif 'Pos' in df.columns:
+            df = df.rename(columns={'Pos': 'Positions'})
+
+        # Ensure numeric columns exist
+        required_stats = ['R', 'RBI', 'SB', 'BB', 'TB', 'XBH', 'SO']
+        for stat in required_stats:
+            if stat not in df.columns:
+                df[stat] = 0
+        
+        # Calculate Fantasy Points
         df['FantasyPoints'] = (
             (df['R'] * w_r) + 
             (df['RBI'] * w_rbi) + 
@@ -40,9 +64,7 @@ def load_data(file):
             (df['SO'] * w_so)
         )
         
-        # Ensure name uniqueness for drafting logic
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
-        
         return df
     except Exception as e:
         st.error(f"Error processing file: {e}")
@@ -59,21 +81,14 @@ else:
 if not df.empty:
     # --- Sidebar: Draft Controls ---
     st.sidebar.header("3. Draft Controls")
-    
-    # Search functionality
     search_query = st.sidebar.text_input("🔍 Search Player")
-    
-    # Position mapping
     league_positions = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
     selected_pos = st.sidebar.selectbox("📂 Position Filter", league_positions)
-    
-    # Toggle to hide drafted players
     hide_drafted = st.sidebar.checkbox("Hide Drafted Players", value=True)
 
     # --- Filtering Logic ---
     filtered_df = df.copy()
 
-    # Apply Position Filter
     if selected_pos != 'All':
         def filter_positions(pos_str):
             player_pos_list = [p.strip() for p in str(pos_str).split(',')]
@@ -87,39 +102,28 @@ if not df.empty:
         mask = filtered_df['Positions'].apply(filter_positions)
         filtered_df = filtered_df[mask]
 
-    # Apply Search Filter
     if search_query:
         filtered_df = filtered_df[filtered_df['Name'].str.contains(search_query, case=False)]
 
-    # Filter out drafted if requested
     if hide_drafted:
         available_df = filtered_df[~filtered_df['ID'].isin(st.session_state.drafted)].copy()
     else:
         available_df = filtered_df.copy()
 
-    # Sorting and Global Rank
     available_df = available_df.sort_values(by='FantasyPoints', ascending=False).reset_index(drop=True)
     available_df['Rank'] = available_df.index + 1
 
     # --- Main UI ---
     st.title("⚾ 2026 Fantasy Baseball Draft Board")
-    
     col1, col2 = st.columns([3, 1])
 
     with col1:
         st.subheader(f"Available Players: {selected_pos}")
         cols_to_show = ['Rank', 'Name', 'Positions', 'FantasyPoints', 'R', 'RBI', 'SB', 'BB', 'SO', 'TB', 'XBH']
-        
-        # Display the table
-        st.dataframe(
-            available_df[cols_to_show], 
-            use_container_width=True, 
-            hide_index=True
-        )
+        st.dataframe(available_df[cols_to_show], use_container_width=True, hide_index=True)
 
     with col2:
         st.subheader("Draft Player")
-        # Selection list for drafting
         player_list = [""] + available_df['ID'].tolist()
         player_to_draft = st.selectbox("Select to mark as Drafted", player_list)
         
@@ -134,7 +138,6 @@ if not df.empty:
             st.session_state.drafted = []
             st.rerun()
 
-    # Show Drafted List at bottom
     if st.session_state.drafted:
         with st.expander("View Drafted Players List"):
             for p in st.session_state.drafted:
