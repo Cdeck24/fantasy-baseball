@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import unicodedata
+import re
 
 # Page Config
 st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", page_icon="⚾")
@@ -9,14 +10,29 @@ st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", pag
 if 'drafted' not in st.session_state:
     st.session_state.drafted = []
 
-# Helper function to remove accents and clean names
+# Helper function to remove accents, suffixes (Jr/Sr), and clean names for robust matching
 def clean_name_string(name):
     if not isinstance(name, str):
         return str(name)
-    # Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn)
+    
+    # 1. Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn) to remove accents
     normalized = unicodedata.normalize('NFD', name)
-    stripped = "".join(c for c in normalized if unicodedata.category(c) != 'Mn')
-    return stripped.strip().lower()
+    name = "".join(c for c in normalized if unicodedata.category(c) != 'Mn')
+    
+    # 2. Convert to lowercase and strip whitespace
+    name = name.lower().strip()
+    
+    # 3. Remove punctuation (like periods in C.J. or hyphens)
+    name = re.sub(r'[.\-]', '', name)
+    
+    # 4. Remove common suffixes (Jr, Sr, II, III, IV, V)
+    # We look for these as standalone words at the end of the string
+    suffixes = [r'\bjr\b', r'\bsr\b', r'\bii\b', r'\biii\b', r'\biv\b', r'\bv\b']
+    for suffix in suffixes:
+        name = re.sub(suffix, '', name)
+    
+    # 5. Final strip to clean up any double spaces left behind by suffix removal
+    return " ".join(name.split())
 
 # --- Sidebar: Data Selection & Scoring ---
 st.sidebar.header("1. Data Selection")
@@ -44,7 +60,7 @@ def load_reference_data():
         pos_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'pos']), None)
         
         if name_col and pos_col:
-            # Keys are cleaned (no accents, lowercase, no spaces)
+            # Map cleaned names to positions
             return {clean_name_string(name): str(pos).strip() for name, pos in zip(ref_df[name_col], ref_df[pos_col])}
         return {}
     except:
