@@ -12,8 +12,8 @@ if 'drafted' not in st.session_state:
 @st.cache_data
 def load_data():
     try:
-        # Load the CSV file
-        df = pd.read_csv('MLB_Batters_2025.xlsx - Sheet1.csv')
+        # Updated filename to match user request
+        df = pd.read_excel('MLB_Batters_2025.xlsx')
         
         # Calculate Fantasy Points based on custom scoring
         # Points = (R + RBI + SB + BB + TB + XBH) - SO
@@ -104,4 +104,4 @@ if not df.empty:
             st.write(st.session_state.drafted)
 
 else:
-    st.info("Please ensure 'MLB_Batters_2025.xlsx - Sheet1.csv' is in the same folder as this script.")
+    st.info("Please ensure 'MLB_Batters_2025.xlsx' is in the same folder as this script.")
