@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import unicodedata
 
 # Page Config
 st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", page_icon="⚾")
@@ -8,9 +9,17 @@ st.set_page_config(page_title="Fantasy Baseball Draft Board", layout="wide", pag
 if 'drafted' not in st.session_state:
     st.session_state.drafted = []
 
+# Helper function to remove accents and clean names
+def clean_name_string(name):
+    if not isinstance(name, str):
+        return str(name)
+    # Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn)
+    normalized = unicodedata.normalize('NFD', name)
+    stripped = "".join(c for c in normalized if unicodedata.category(c) != 'Mn')
+    return stripped.strip().lower()
+
 # --- Sidebar: Data Selection & Scoring ---
 st.sidebar.header("1. Data Selection")
-# Toggle between 2025 and 2026 data
 data_year = st.sidebar.radio("Select Season Data", ["2026 Projections", "2025 Actuals"])
 file_to_load = 'MLB_Batters_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Batters_2025.xlsx'
 
@@ -28,13 +37,15 @@ with st.sidebar.expander("Adjust Point Weights"):
 @st.cache_data
 def load_reference_data():
     try:
-        # We always use 2025 as the source of truth for positions if needed
         ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
+        
         name_col = next((c for c in ref_df.columns if c.lower() == 'name'), None)
         pos_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'pos']), None)
+        
         if name_col and pos_col:
-            return dict(zip(ref_df[name_col], ref_df[pos_col]))
+            # Keys are cleaned (no accents, lowercase, no spaces)
+            return {clean_name_string(name): str(pos).strip() for name, pos in zip(ref_df[name_col], ref_df[pos_col])}
         return {}
     except:
         return {}
@@ -60,7 +71,8 @@ def load_data(filename, _weights):
         if current_pos_col:
             df = df.rename(columns={current_pos_col: 'Positions'})
         else:
-            df['Positions'] = df['Name'].map(pos_map).fillna('Util')
+            # Apply clean_name_string to match against the reference map
+            df['Positions'] = df['Name'].apply(lambda x: pos_map.get(clean_name_string(x), 'Util'))
 
         # Ensure numeric columns exist
         stat_mapping = {
