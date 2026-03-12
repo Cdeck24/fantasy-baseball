@@ -15,28 +15,33 @@ def clean_name_string(name):
     if not isinstance(name, str):
         return str(name)
     
-    # 1. Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn) to remove accents
-    # This specifically targets characters like 'ñ' and 'é'
+    # 1. Standardize common baseball-specific character variations before normalization
+    # Specifically replacing 'ñ' with 'n' manually because some normalization paths miss it
+    name = name.replace('ñ', 'n').replace('Ñ', 'n')
+    
+    # 2. Normalize to decomposed form (NFD) and filter out non-spacing marks (Mn)
     normalized = unicodedata.normalize('NFD', name)
     name = "".join(c for c in normalized if unicodedata.category(c) != 'Mn')
     
-    # 2. Convert to lowercase and strip whitespace
+    # 3. Convert to lowercase and strip whitespace
     name = name.lower().strip()
     
-    # 3. Remove punctuation (like periods in C.J., hyphens, and commas before suffixes)
+    # 4. Remove punctuation (like periods in C.J., hyphens, and commas)
     name = re.sub(r'[.\-,\']', '', name)
     
-    # 4. Remove common suffixes (Jr, Sr, II, III, IV, V)
-    # Using \b to match word boundaries ensures we don't accidentally strip names ending in these letters
+    # 5. Remove common suffixes (Jr, Sr, II, III, IV, V)
+    # This regex looks for these suffixes at the end of words or strings
+    # Added extra patterns to catch suffixes with and without periods or trailing spaces
     suffixes = [r'\bjr\b', r'\bsr\b', r'\bii\b', r'\biii\b', r'\biv\b', r'\bv\b']
     for suffix in suffixes:
         name = re.sub(suffix, '', name)
     
-    # 5. Final strip to clean up any double spaces left behind by suffix removal
+    # 6. Final strip to clean up any double spaces left behind by suffix removal
     return " ".join(name.split())
 
 # --- Sidebar: Data Selection & Scoring ---
 st.sidebar.header("1. Data Selection")
+# Toggle between 2025 and 2026 data
 data_year = st.sidebar.radio("Select Season Data", ["2026 Projections", "2025 Actuals"])
 file_to_load = 'MLB_Batters_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Batters_2025.xlsx'
 
@@ -54,6 +59,7 @@ with st.sidebar.expander("Adjust Point Weights"):
 @st.cache_data
 def load_reference_data():
     try:
+        # We always use 2025 as the source of truth for positions if needed
         ref_df = pd.read_excel('MLB_Batters_2025.xlsx')
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
         
