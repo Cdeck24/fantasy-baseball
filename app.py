@@ -70,7 +70,6 @@ def load_reference_data(filename):
         df = pd.read_excel(filename)
         df.columns = [str(c).strip() for c in df.columns]
         n_col = next((c for c in df.columns if c.lower() == 'name'), None)
-        # Check for 'Positions' or 'Position'
         p_col = next((c for c in df.columns if c.lower() in ['positions', 'position', 'pos']), None)
         if n_col and p_col:
             return {clean_name_string(n): str(p).strip() for n, p in zip(df[n_col], df[p_col])}
@@ -89,25 +88,25 @@ def load_data(filename, player_type, _weights):
         if not name_col: return pd.DataFrame()
         df = df.rename(columns={name_col: 'Name'})
         
-        # Look for existing position column
+        # Look for existing position column in the current file first
         pos_col = next((c for c in df.columns if c.lower() in ['positions', 'position', 'pos']), None)
         if pos_col:
             df = df.rename(columns={pos_col: 'Positions'})
         else:
-            # Fuzzy match positions from reference if missing
+            # Fuzzy match positions from reference if missing in the 2026 file
             ref_names = list(pos_map.keys())
             def get_pos(n):
                 c_n = clean_name_string(n)
                 if c_n in pos_map: return pos_map[c_n]
                 matches = difflib.get_close_matches(c_n, ref_names, n=1, cutoff=0.85)
                 if matches: return pos_map[matches[0]]
-                return 'SP' if player_type == "Pitchers" else 'Util'
+                # Use 'P' as a safer fallback if we really don't know
+                return 'P'
             df['Positions'] = df['Name'].apply(get_pos)
 
         # Standardize stat columns and calculate points
         pts = 0
         for stat, weight in _weights.items():
-            # Handle aliases like SO/K
             aliases = [stat]
             if stat == 'SO': aliases.append('K')
             if stat == 'K': aliases.append('SO')
@@ -132,8 +131,8 @@ if not df.empty:
     if player_type == "Batters":
         pos_list = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
     else:
-        # Support searching for SP, RP, or dual eligible
-        pos_list = ['All', 'SP', 'RP']
+        # Added 'P' to the filter list for pitchers
+        pos_list = ['All', 'SP', 'RP', 'P']
     
     sel_pos = st.sidebar.selectbox("Filter Position", pos_list)
     hide_dr = st.sidebar.checkbox("Hide Drafted", value=True)
@@ -144,6 +143,7 @@ if not df.empty:
         def pos_filter(p_str):
             plist = [p.strip() for p in str(p_str).split(',')]
             if sel_pos == 'IF': return any(x in ['1B', '2B', '3B', 'SS'] for x in plist)
+            # Match specific position or general 'P'
             return sel_pos in plist
         f_df = f_df[f_df['Positions'].apply(pos_filter)]
     
@@ -156,12 +156,10 @@ if not df.empty:
     st.title(f"⚾ {data_year} {player_type} Board")
     c1, c2 = st.columns([3, 1])
     with c1:
-        # Define display columns based on type
         disp_cols = ['Rank', 'Name', 'Positions', 'FantasyPoints']
         if player_type == "Batters": 
             disp_cols += ['R', 'RBI', 'SB', 'BB', 'TB']
         else: 
-            # Show the stats relevant to your pitcher scoring
             disp_cols += ['IP', 'W', 'L', 'SV', 'HLD', 'K', 'ERA', 'WHIP']
         
         actual_disp = [c for c in disp_cols if c in f_df.columns]
