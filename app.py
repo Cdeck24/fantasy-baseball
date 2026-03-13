@@ -72,6 +72,7 @@ def load_reference_data(filename):
         n_col = next((c for c in df.columns if c.lower() == 'name'), None)
         p_col = next((c for c in df.columns if c.lower() in ['positions', 'position', 'pos']), None)
         if n_col and p_col:
+            # Map cleaned names to the position found in the 2025 file
             return {clean_name_string(n): str(p).strip() for n, p in zip(df[n_col], df[p_col])}
     except: return {}
     return {}
@@ -82,26 +83,29 @@ def load_data(filename, player_type, _weights):
         df = pd.read_excel(filename)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Position Recovery
+        # Position Recovery from the 2025 Reference File
         pos_map = load_reference_data(ref_file)
         name_col = next((c for c in df.columns if c.lower() == 'name'), None)
         if not name_col: return pd.DataFrame()
         df = df.rename(columns={name_col: 'Name'})
         
-        # Look for existing position column in the current file first
+        # Look for existing position column in the uploaded file first
         pos_col = next((c for c in df.columns if c.lower() in ['positions', 'position', 'pos']), None)
+        
         if pos_col:
             df = df.rename(columns={pos_col: 'Positions'})
         else:
-            # Fuzzy match positions from reference if missing in the 2026 file
+            # If no position column exists (like in your 2026 file), match by name
             ref_names = list(pos_map.keys())
             def get_pos(n):
                 c_n = clean_name_string(n)
+                # 1. Exact cleaned match
                 if c_n in pos_map: return pos_map[c_n]
+                # 2. Fuzzy match
                 matches = difflib.get_close_matches(c_n, ref_names, n=1, cutoff=0.85)
                 if matches: return pos_map[matches[0]]
-                # Use 'P' as a safer fallback if we really don't know
-                return 'P'
+                # 3. Fallback
+                return 'P' if player_type == "Pitchers" else 'Util'
             df['Positions'] = df['Name'].apply(get_pos)
 
         # Standardize stat columns and calculate points
@@ -116,12 +120,14 @@ def load_data(filename, player_type, _weights):
                 pts += pd.to_numeric(df[col], errors='coerce').fillna(0) * weight
         df['FantasyPoints'] = pts
         
+        # Create ID for draft tracking
         df['ID'] = df['Name'].astype(str) + " (" + df['Positions'].astype(str) + ")"
         return df
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error processing data: {e}")
         return pd.DataFrame()
 
+# Load Data
 df = load_data(file_to_load, player_type, weights)
 
 if not df.empty:
@@ -131,31 +137,39 @@ if not df.empty:
     if player_type == "Batters":
         pos_list = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
     else:
-        # Added 'P' to the filter list for pitchers
+        # Standardize available filters for pitchers
         pos_list = ['All', 'SP', 'RP', 'P']
     
     sel_pos = st.sidebar.selectbox("Filter Position", pos_list)
     hide_dr = st.sidebar.checkbox("Hide Drafted", value=True)
 
-    # Filtering
+    # --- Filtering Logic ---
     f_df = df.copy()
     if sel_pos != 'All':
         def pos_filter(p_str):
             plist = [p.strip() for p in str(p_str).split(',')]
-            if sel_pos == 'IF': return any(x in ['1B', '2B', '3B', 'SS'] for x in plist)
-            # Match specific position or general 'P'
+            if sel_pos == 'IF': 
+                return any(x in ['1B', '2B', '3B', 'SS'] for x in plist)
+            # If filtering by SP, RP, or P, check if it's in the player's positions string
             return sel_pos in plist
         f_df = f_df[f_df['Positions'].apply(pos_filter)]
     
-    if search: f_df = f_df[f_df['Name'].str.contains(search, case=False)]
-    if hide_dr: f_df = f_df[~f_df['ID'].isin(st.session_state.drafted)]
+    if search: 
+        f_df = f_df[f_df['Name'].str.contains(search, case=False)]
+    
+    if hide_dr: 
+        f_df = f_df[~f_df['ID'].isin(st.session_state.drafted)]
 
+    # Sorting and Ranking
     f_df = f_df.sort_values('FantasyPoints', ascending=False).reset_index(drop=True)
     f_df['Rank'] = f_df.index + 1
 
+    # --- UI Layout ---
     st.title(f"⚾ {data_year} {player_type} Board")
     c1, c2 = st.columns([3, 1])
+    
     with c1:
+        # Define columns to display
         disp_cols = ['Rank', 'Name', 'Positions', 'FantasyPoints']
         if player_type == "Batters": 
             disp_cols += ['R', 'RBI', 'SB', 'BB', 'TB']
@@ -171,9 +185,11 @@ if not df.empty:
         if st.button("Mark Drafted") and p_to_dr != "":
             st.session_state.drafted.append(p_to_dr)
             st.rerun()
+        
         if st.button("Reset Draft"):
             st.session_state.drafted = []
             st.rerun()
+        
         st.write(f"Drafted: {len(st.session_state.drafted)}")
 else:
-    st.info("Upload your Excel files to GitHub to see the board.")
+    st.info("Ensure MLB_Pitchers_2025.xlsx and MLB_Pitchers_2026.xlsx are in your GitHub repository.")
