@@ -46,10 +46,10 @@ data_year = st.sidebar.radio("Season", ["2026 Projections", "2025 Actuals"])
 # Assign file paths based on selection
 if player_type == "Batters":
     file_to_load = 'MLB_Batters_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Batters_2025.xlsx'
-    ref_file = 'MLB_Batters_2025.xlsx'
+    ref_file_path = 'MLB_Batters_2025.xlsx'
 else:
     file_to_load = 'MLB_Pitchers_2026.xlsx' if data_year == "2026 Projections" else 'MLB_Pitchers_2025.xlsx'
-    ref_file = 'MLB_Pitchers_2025.xlsx'
+    ref_file_path = 'MLB_Pitchers_2025.xlsx'
 
 st.sidebar.header("2. Scoring Weights")
 weights = {}
@@ -83,18 +83,21 @@ else:
 def load_reference_map(filename):
     try:
         ref_df = pd.read_excel(filename)
+        # Force all column names to string and strip them
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
         
-        # Identify name and position columns
+        # Case-insensitive column search
         n_col = next((c for c in ref_df.columns if c.lower() == 'name'), None)
         p_col = next((c for c in ref_df.columns if c.lower() in ['positions', 'position', 'pos']), None)
         
         if n_col and p_col:
             # Create a dict mapping Cleaned Name -> Position
-            mapping = {clean_name_string(row[n_col]): str(row[p_col]).strip() for _, row in ref_df.iterrows()}
+            mapping = {clean_name_string(str(row[n_col])): str(row[p_col]).strip() for _, row in ref_df.iterrows()}
             return mapping
+        else:
+            st.sidebar.error(f"Could not find Name or Position columns in {filename}")
     except Exception as e:
-        st.sidebar.error(f"Reference Error: {e}")
+        st.sidebar.error(f"Error loading {filename}: {e}")
     return {}
 
 # --- Logic: Load and Score Data ---
@@ -108,6 +111,7 @@ def load_processed_data(filename, p_type, _weights, ref_filename):
         pos_map = load_reference_map(ref_filename)
         name_col = next((c for c in df.columns if c.lower() == 'name'), None)
         if not name_col:
+            st.error(f"Missing 'Name' column in {filename}")
             return pd.DataFrame()
         
         df = df.rename(columns={name_col: 'Name'})
@@ -127,7 +131,7 @@ def load_processed_data(filename, p_type, _weights, ref_filename):
                 if cleaned in pos_map:
                     return pos_map[cleaned]
                 # Try fuzzy match
-                matches = difflib.get_close_matches(cleaned, ref_cleaned_names, n=1, cutoff=0.85)
+                matches = difflib.get_close_matches(cleaned, ref_cleaned_names, n=1, cutoff=0.8)
                 if matches:
                     return pos_map[matches[0]]
                 # Fallback
@@ -156,7 +160,7 @@ def load_processed_data(filename, p_type, _weights, ref_filename):
         return pd.DataFrame()
 
 # Load Data
-main_df = load_processed_data(file_to_load, player_type, weights, ref_file)
+main_df = load_processed_data(file_to_load, player_type, weights, ref_file_path)
 
 # --- Main UI ---
 if not main_df.empty:
@@ -196,8 +200,11 @@ if not main_df.empty:
     
     # Sidebar Debug (Confirming reference loading)
     if data_year == "2026 Projections":
-        p_map = load_reference_map(ref_file)
-        st.sidebar.success(f"Matched positions for {len(p_map)} players using 2025 data.")
+        p_map = load_reference_map(ref_file_path)
+        if p_map:
+            st.sidebar.success(f"Matched positions for {len(p_map)} players using 2025 data.")
+        else:
+            st.sidebar.warning(f"Could not load reference data from {ref_file_path}")
 
     c1, c2 = st.columns([3, 1])
     
@@ -230,4 +237,4 @@ if not main_df.empty:
                 for p in reversed(st.session_state.drafted):
                     st.text(p)
 else:
-    st.warning(f"File Not Found: Please upload '{file_to_load}' to your GitHub repository.")
+    st.warning(f"File Not Found: Please upload '{file_to_load}' and '{ref_file_path}' to your GitHub repository.")
