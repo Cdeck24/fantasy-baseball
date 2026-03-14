@@ -40,6 +40,12 @@ def clean_name_string(name):
 
 # --- Sidebar ---
 st.sidebar.header("1. Settings")
+
+# Cache Clearing Utility
+if st.sidebar.button("🔄 Clear Cache & Refresh Files"):
+    st.cache_data.clear()
+    st.rerun()
+
 player_type = st.sidebar.radio("Player Type", ["Batters", "Pitchers"])
 data_year = st.sidebar.radio("Season", ["2026 Projections", "2025 Actuals"])
 
