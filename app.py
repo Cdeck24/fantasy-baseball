@@ -154,6 +154,16 @@ def get_current_drafter(pick, teams):
     else: # Even round
         return teams - spot_in_round
 
+def get_all_user_picks(teams, user_spot, total_rounds):
+    user_picks = []
+    for r in range(1, total_rounds + 1):
+        if r % 2 == 1: # Odd round
+            pick = (r - 1) * teams + user_spot
+        else: # Even round (Snake)
+            pick = (r - 1) * teams + (teams - user_spot + 1)
+        user_picks.append(pick)
+    return user_picks
+
 if not main_df.empty:
     display_df = main_df.copy()
     display_df = display_df.sort_values('FantasyPoints', ascending=False).reset_index(drop=True)
@@ -168,7 +178,7 @@ if not main_df.empty:
                 cpu_pick = available.iloc[0]['ID']
                 st.session_state.drafted.append(cpu_pick)
                 st.session_state.current_pick += 1
-                time.sleep(0.3)
+                time.sleep(0.1)
                 st.rerun()
 
     # --- UI ---
@@ -184,10 +194,30 @@ if not main_df.empty:
     c1, c2 = st.columns([3, 1.2])
     
     with c1:
+        # Target Strategy Section
+        with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
+            user_picks = get_all_user_picks(num_teams, user_spot, total_rounds)
+            upcoming_picks = [p for p in user_picks if p >= st.session_state.current_pick][:3]
+            
+            if upcoming_picks:
+                st.write(f"Your next picks: **{', '.join(map(str, upcoming_picks))}**")
+                available_for_targets = display_df[~display_df['ID'].isin(st.session_state.drafted)].copy()
+                
+                t_cols = st.columns(len(upcoming_picks))
+                for i, p_num in enumerate(upcoming_picks):
+                    with t_cols[i]:
+                        st.markdown(f"**Pick #{p_num} Targets:**")
+                        # Show top 3 available players near that rank
+                        # We assume top players are drafted in order, so look at players starting at p_num
+                        targets = available_for_targets.iloc[0:5] # Simplified: show top available
+                        for idx, row in targets.head(3).iterrows():
+                            st.caption(f"Rank {row['Rank']}: {row['Name']} ({row['Positions']})")
+            else:
+                st.write("Draft complete or no upcoming picks found.")
+
         sub_c1, sub_c2 = st.columns([2, 1])
         search = sub_c1.text_input("🔍 Search Player")
         
-        # Positions based on league requirement
         if player_type == "Batters": 
             p_filters = ['All', 'C', '1B', '2B', '3B', 'SS', 'IF', 'OF', 'Util']
         elif player_type == "Pitchers": 
@@ -222,92 +252,63 @@ if not main_df.empty:
 
     with c2:
         st.subheader("Your Roster Tracker")
-        
-        # --- ROSTER LOGIC ---
         roster_requirements = {
             "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 3, "Util": 1,
             "SP": 5, "RP": 2, "P": 1, "BN": 4
         }
-        
-        # Determine your picks based on draft spot
-        your_picks_ids = []
-        for i, p_id in enumerate(st.session_state.drafted):
-            p_num = i + 1
-            if get_current_drafter(p_num, num_teams) == user_spot:
-                your_picks_ids.append(p_id)
-        
-        # Get data for your picks to determine positions
+        your_picks_ids = [p_id for i, p_id in enumerate(st.session_state.drafted) if get_current_drafter(i+1, num_teams) == user_spot]
         your_roster_data = main_df[main_df['ID'].isin(your_picks_ids)].copy()
-        
-        # Fill slots
         filled_slots = {k: [] for k in roster_requirements.keys()}
         remaining_players = your_roster_data.to_dict('records')
         
-        # Simple Greedy Slot Filler
-        # 1. Fill exact matches (C, 1B, etc.)
+        # Slot Filling logic
         for slot in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
             for p in list(remaining_players):
                 p_pos = [x.strip() for x in str(p['Positions']).split(',')]
                 if slot in p_pos and len(filled_slots[slot]) < roster_requirements[slot]:
                     filled_slots[slot].append(p['Name'])
                     remaining_players.remove(p)
-        
-        # 2. Fill Infield (IF) - Must be 1B, 2B, 3B, or SS
         for p in list(remaining_players):
             p_pos = [x.strip() for x in str(p['Positions']).split(',')]
             if any(pos in ["1B", "2B", "3B", "SS"] for pos in p_pos) and len(filled_slots["IF"]) < roster_requirements["IF"]:
                 filled_slots["IF"].append(p['Name'])
                 remaining_players.remove(p)
-
-        # 3. Fill General Pitcher (P)
         for p in list(remaining_players):
             if p['Type'] == "Pitchers" and len(filled_slots["P"]) < roster_requirements["P"]:
                 filled_slots["P"].append(p['Name'])
                 remaining_players.remove(p)
-
-        # 4. Fill Utility (Util)
         for p in list(remaining_players):
             if p['Type'] == "Batters" and len(filled_slots["Util"]) < roster_requirements["Util"]:
                 filled_slots["Util"].append(p['Name'])
                 remaining_players.remove(p)
-
-        # 5. Fill Bench (BN)
         for p in list(remaining_players):
             if len(filled_slots["BN"]) < roster_requirements["BN"]:
                 filled_slots["BN"].append(p['Name'])
                 remaining_players.remove(p)
 
-        # Display Slots
         for slot, count in roster_requirements.items():
             current_fill = filled_slots[slot]
             for i in range(count):
-                label = f"{slot}"
                 player_name = current_fill[i] if i < len(current_fill) else "---"
-                icon = "✅" if player_name != "---" else "⬜"
-                st.write(f"{icon} **{label}:** {player_name}")
+                st.write(f"{'✅' if player_name != '---' else '⬜'} **{slot}:** {player_name}")
 
         st.markdown("---")
-        # Draft Controls
         choice = st.selectbox("Select Player", [""] + filtered_df['ID'].tolist())
         can_draft = True
         if st.session_state.mock_active and get_current_drafter(st.session_state.current_pick, num_teams) != user_spot:
             can_draft = False
-        
         if st.button("Mark as Drafted", disabled=not can_draft, use_container_width=True) and choice != "":
             st.session_state.drafted.append(choice)
             st.session_state.current_pick += 1
             st.rerun()
-        
         if st.button("Reset Draft", use_container_width=True):
             st.session_state.drafted = []
             st.session_state.current_pick = 1
             st.rerun()
-
         st.write(f"Total Picked: **{len(st.session_state.drafted)}**")
         with st.expander("Full Draft History"):
             for i, p in enumerate(reversed(st.session_state.drafted)):
                 pick_num = len(st.session_state.drafted) - i
                 st.text(f"#{pick_num}: {p}")
-
 else:
     st.warning("Ensure all .xlsx files are in your GitHub repository.")
