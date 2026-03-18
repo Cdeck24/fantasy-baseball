@@ -194,26 +194,28 @@ if not main_df.empty:
     c1, c2 = st.columns([3, 1.2])
     
     with c1:
-        # Target Strategy Section
+        # --- NEW SECTION: UPCOMING TARGETS ---
         with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
             user_picks = get_all_user_picks(num_teams, user_spot, total_rounds)
             upcoming_picks = [p for p in user_picks if p >= st.session_state.current_pick][:3]
             
             if upcoming_picks:
                 st.write(f"Your next picks: **{', '.join(map(str, upcoming_picks))}**")
+                # Filter out everyone already drafted
                 available_for_targets = display_df[~display_df['ID'].isin(st.session_state.drafted)].copy()
                 
                 t_cols = st.columns(len(upcoming_picks))
                 for i, p_num in enumerate(upcoming_picks):
                     with t_cols[i]:
                         st.markdown(f"**Pick #{p_num} Targets:**")
-                        # Show top 3 available players near that rank
-                        # We assume top players are drafted in order, so look at players starting at p_num
-                        targets = available_for_targets.iloc[0:5] # Simplified: show top available
-                        for idx, row in targets.head(3).iterrows():
+                        # Strategy: Highlight the top 3 available based on current rank
+                        # In a real draft, we'd expect some players between current pick and p_num to be gone
+                        # This shows the absolute best values currently available
+                        targets = available_for_targets.head(3)
+                        for idx, row in targets.iterrows():
                             st.caption(f"Rank {row['Rank']}: {row['Name']} ({row['Positions']})")
             else:
-                st.write("Draft complete or no upcoming picks found.")
+                st.info("No upcoming picks found or draft complete.")
 
         sub_c1, sub_c2 = st.columns([2, 1])
         search = sub_c1.text_input("🔍 Search Player")
