@@ -208,9 +208,6 @@ if not main_df.empty:
                 for i, p_num in enumerate(upcoming_picks):
                     with t_cols[i]:
                         st.markdown(f"**Pick #{p_num} Targets:**")
-                        # Strategy: Highlight the top 3 available based on current rank
-                        # In a real draft, we'd expect some players between current pick and p_num to be gone
-                        # This shows the absolute best values currently available
                         targets = available_for_targets.head(3)
                         for idx, row in targets.iterrows():
                             st.caption(f"Rank {row['Rank']}: {row['Name']} ({row['Positions']})")
@@ -299,14 +296,23 @@ if not main_df.empty:
         can_draft = True
         if st.session_state.mock_active and get_current_drafter(st.session_state.current_pick, num_teams) != user_spot:
             can_draft = False
+        
+        # Action Buttons
         if st.button("Mark as Drafted", disabled=not can_draft, use_container_width=True) and choice != "":
             st.session_state.drafted.append(choice)
             st.session_state.current_pick += 1
             st.rerun()
+            
+        if st.button("↩️ Undo Last Pick", use_container_width=True, disabled=len(st.session_state.drafted) == 0):
+            st.session_state.drafted.pop()
+            st.session_state.current_pick -= 1
+            st.rerun()
+            
         if st.button("Reset Draft", use_container_width=True):
             st.session_state.drafted = []
             st.session_state.current_pick = 1
             st.rerun()
+            
         st.write(f"Total Picked: **{len(st.session_state.drafted)}**")
         with st.expander("Full Draft History"):
             for i, p in enumerate(reversed(st.session_state.drafted)):
