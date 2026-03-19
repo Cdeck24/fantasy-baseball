@@ -141,9 +141,12 @@ p_file = 'MLB_Pitchers_2026.xlsx' if data_year == "2026 Projections" else 'MLB_P
 b_df = load_and_process(b_file, "Batters", weights_batter, 'MLB_Batters_2025.xlsx')
 p_df = load_and_process(p_file, "Pitchers", weights_pitcher, 'MLB_Pitchers_2025.xlsx')
 
+# Combined master dataframe for scoring purposes
+full_master_df = pd.concat([b_df, p_df], ignore_index=True)
+
 if player_type == "Batters": main_df = b_df
 elif player_type == "Pitchers": main_df = p_df
-else: main_df = pd.concat([b_df, p_df], ignore_index=True)
+else: main_df = full_master_df
 
 # --- Mock Calculation ---
 def get_current_drafter(pick, teams):
@@ -169,8 +172,11 @@ if not main_df.empty:
     display_df = display_df.sort_values('FantasyPoints', ascending=False).reset_index(drop=True)
     display_df['Rank'] = display_df.index + 1
     
+    total_picks_possible = num_teams * total_rounds
+    draft_complete = st.session_state.current_pick > total_picks_possible
+
     # Check if CPU should draft
-    if st.session_state.mock_active:
+    if st.session_state.mock_active and not draft_complete:
         current_drafter = get_current_drafter(st.session_state.current_pick, num_teams)
         if current_drafter != user_spot:
             available = display_df[~display_df['ID'].isin(st.session_state.drafted)]
@@ -184,22 +190,39 @@ if not main_df.empty:
     # --- UI ---
     st.title(f"⚾ {data_year} {player_type} Board")
     
-    if st.session_state.mock_active:
+    if st.session_state.mock_active and not draft_complete:
         round_display = ((st.session_state.current_pick - 1) // num_teams) + 1
         drafter = get_current_drafter(st.session_state.current_pick, num_teams)
         st.subheader(f"Round {round_display} | Pick {st.session_state.current_pick} | Currently Drafting: Team {drafter}")
         if drafter == user_spot:
             st.success("🎯 YOUR TURN TO PICK!")
+    elif draft_complete:
+        st.balloons()
+        st.success("🏆 Draft Complete! View League Standings below.")
+
+    # --- LEAGUE STANDINGS (Only visible when draft ends) ---
+    if draft_complete:
+        with st.expander("📊 FINAL LEAGUE STANDINGS", expanded=True):
+            team_scores = []
+            for t_idx in range(1, num_teams + 1):
+                t_picks_ids = [p_id for i, p_id in enumerate(st.session_state.drafted) if get_current_drafter(i+1, num_teams) == t_idx]
+                t_data = full_master_df[full_master_df['ID'].isin(t_picks_ids)]
+                t_score = t_data['FantasyPoints'].sum()
+                team_scores.append({"Team": f"Team {t_idx}" + (" (You)" if t_idx == user_spot else ""), "Total Points": t_score, "Avg Pick Value": t_score / total_rounds if total_rounds > 0 else 0})
+            
+            standings_df = pd.DataFrame(team_scores).sort_values("Total Points", ascending=False).reset_index(drop=True)
+            standings_df.index += 1
+            st.table(standings_df)
 
     c1, c2 = st.columns([3, 1.2])
     
-    # --- Roster Tracker Prep (Needed for Recommendations) ---
+    # --- Roster Tracker Prep ---
     roster_requirements = {
         "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 3, "Util": 1,
         "SP": 5, "RP": 2, "P": 1, "BN": 4
     }
     your_picks_ids = [p_id for i, p_id in enumerate(st.session_state.drafted) if get_current_drafter(i+1, num_teams) == user_spot]
-    your_roster_data = main_df[main_df['ID'].isin(your_picks_ids)].copy()
+    your_roster_data = full_master_df[full_master_df['ID'].isin(your_picks_ids)].copy()
     
     filled_slots = {k: [] for k in roster_requirements.keys()}
     temp_remaining = your_roster_data.to_dict('records')
@@ -233,43 +256,39 @@ if not main_df.empty:
     missing_pos = [k for k, v in filled_slots.items() if len(v) < roster_requirements[k] and k != "BN"]
 
     with c1:
-        # --- NEW SECTION: UPCOMING TARGETS (SMART RECOMMENDATIONS) ---
-        with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
-            user_picks = get_all_user_picks(num_teams, user_spot, total_rounds)
-            upcoming_picks = [p for p in user_picks if p >= st.session_state.current_pick][:3]
-            
-            if upcoming_picks:
-                st.write(f"Your next picks: **{', '.join(map(str, upcoming_picks))}**")
-                st.write(f"Needs: {', '.join(missing_pos) if missing_pos else 'Bench/Depth'}")
-                available_for_targets = display_df[~display_df['ID'].isin(st.session_state.drafted)].copy()
+        # --- UPCOMING TARGETS (SMART RECOMMENDATIONS) ---
+        if not draft_complete:
+            with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
+                user_picks = get_all_user_picks(num_teams, user_spot, total_rounds)
+                upcoming_picks = [p for p in user_picks if p >= st.session_state.current_pick][:3]
                 
-                t_cols = st.columns(len(upcoming_picks))
-                for i, p_num in enumerate(upcoming_picks):
-                    with t_cols[i]:
-                        st.markdown(f"**Pick #{p_num} Targets:**")
-                        # Strategy: Look for Best Available that fits a missing position
-                        # If no missing pos, just show best available
-                        if missing_pos:
-                            rec_list = []
-                            for _, p in available_for_targets.iterrows():
-                                p_pos = [x.strip() for x in str(p['Positions']).split(',')]
-                                is_needed = any(mp in p_pos for mp in missing_pos) or \
-                                            (p['Type'] == "Pitchers" and "P" in missing_pos) or \
-                                            (p['Type'] == "Batters" and "Util" in missing_pos) or \
-                                            (any(pos in ["1B","2B","3B","SS"] for pos in p_pos) and "IF" in missing_pos)
-                                if is_needed:
-                                    rec_list.append(p)
-                                if len(rec_list) >= 3: break
-                            
-                            if not rec_list: # Fallback to top overall
+                if upcoming_picks:
+                    st.write(f"Your next picks: **{', '.join(map(str, upcoming_picks))}**")
+                    st.write(f"Needs: {', '.join(missing_pos) if missing_pos else 'Bench/Depth'}")
+                    available_for_targets = display_df[~display_df['ID'].isin(st.session_state.drafted)].copy()
+                    
+                    t_cols = st.columns(len(upcoming_picks))
+                    for i, p_num in enumerate(upcoming_picks):
+                        with t_cols[i]:
+                            st.markdown(f"**Pick #{p_num} Targets:**")
+                            if missing_pos:
+                                rec_list = []
+                                for _, p in available_for_targets.iterrows():
+                                    p_pos = [x.strip() for x in str(p['Positions']).split(',')]
+                                    is_needed = any(mp in p_pos for mp in missing_pos) or \
+                                                (p['Type'] == "Pitchers" and "P" in missing_pos) or \
+                                                (p['Type'] == "Batters" and "Util" in missing_pos) or \
+                                                (any(pos in ["1B","2B","3B","SS"] for pos in p_pos) and "IF" in missing_pos)
+                                    if is_needed: rec_list.append(p)
+                                    if len(rec_list) >= 3: break
+                                if not rec_list: rec_list = available_for_targets.head(3).to_dict('records')
+                            else:
                                 rec_list = available_for_targets.head(3).to_dict('records')
-                        else:
-                            rec_list = available_for_targets.head(3).to_dict('records')
-                        
-                        for p in rec_list:
-                            st.caption(f"Rank {p['Rank']}: {p['Name']} ({p['Positions']})")
-            else:
-                st.info("No upcoming picks found or draft complete.")
+                            
+                            for p in rec_list:
+                                st.caption(f"Rank {p['Rank']}: {p['Name']} ({p['Positions']})")
+                else:
+                    st.info("No upcoming picks found or draft complete.")
 
         sub_c1, sub_c2 = st.columns([2, 1])
         search = sub_c1.text_input("🔍 Search Player")
@@ -311,7 +330,7 @@ if not main_df.empty:
         
         # --- PROJECTED SCORE SECTION ---
         total_projected_pts = sum([sum([p['FantasyPoints'] for p in list_of_players]) for list_of_players in filled_slots.values()])
-        st.metric("Total Projected Score", f"{total_projected_pts:,.0f} pts")
+        st.metric("Your Total Projected Score", f"{total_projected_pts:,.0f} pts")
         st.markdown("---")
 
         for slot, count in roster_requirements.items():
@@ -324,7 +343,7 @@ if not main_df.empty:
 
         st.markdown("---")
         choice = st.selectbox("Select Player", [""] + filtered_df['ID'].tolist())
-        can_draft = True
+        can_draft = not draft_complete
         if st.session_state.mock_active and get_current_drafter(st.session_state.current_pick, num_teams) != user_spot:
             can_draft = False
         
@@ -344,7 +363,7 @@ if not main_df.empty:
             st.session_state.current_pick = 1
             st.rerun()
             
-        st.write(f"Total Picked: **{len(st.session_state.drafted)}**")
+        st.write(f"Total Picked: **{len(st.session_state.drafted)} / {total_picks_possible}**")
         with st.expander("Full Draft History"):
             for i, p in enumerate(reversed(st.session_state.drafted)):
                 pick_num = len(st.session_state.drafted) - i
