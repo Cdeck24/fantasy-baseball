@@ -193,24 +193,81 @@ if not main_df.empty:
 
     c1, c2 = st.columns([3, 1.2])
     
+    # --- Roster Tracker Prep (Needed for Recommendations) ---
+    roster_requirements = {
+        "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 3, "Util": 1,
+        "SP": 5, "RP": 2, "P": 1, "BN": 4
+    }
+    your_picks_ids = [p_id for i, p_id in enumerate(st.session_state.drafted) if get_current_drafter(i+1, num_teams) == user_spot]
+    your_roster_data = main_df[main_df['ID'].isin(your_picks_ids)].copy()
+    
+    filled_slots = {k: [] for k in roster_requirements.keys()}
+    temp_remaining = your_roster_data.to_dict('records')
+    
+    # Logic to fill slots (greedy)
+    for slot in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
+        for p in list(temp_remaining):
+            p_pos = [x.strip() for x in str(p['Positions']).split(',')]
+            if slot in p_pos and len(filled_slots[slot]) < roster_requirements[slot]:
+                filled_slots[slot].append(p)
+                temp_remaining.remove(p)
+    for p in list(temp_remaining):
+        p_pos = [x.strip() for x in str(p['Positions']).split(',')]
+        if any(pos in ["1B", "2B", "3B", "SS"] for pos in p_pos) and len(filled_slots["IF"]) < roster_requirements["IF"]:
+            filled_slots["IF"].append(p)
+            temp_remaining.remove(p)
+    for p in list(temp_remaining):
+        if p['Type'] == "Pitchers" and len(filled_slots["P"]) < roster_requirements["P"]:
+            filled_slots["P"].append(p)
+            temp_remaining.remove(p)
+    for p in list(temp_remaining):
+        if p['Type'] == "Batters" and len(filled_slots["Util"]) < roster_requirements["Util"]:
+            filled_slots["Util"].append(p)
+            temp_remaining.remove(p)
+    for p in list(temp_remaining):
+        if len(filled_slots["BN"]) < roster_requirements["BN"]:
+            filled_slots["BN"].append(p)
+            temp_remaining.remove(p)
+            
+    # Calculate Missing Positions
+    missing_pos = [k for k, v in filled_slots.items() if len(v) < roster_requirements[k] and k != "BN"]
+
     with c1:
-        # --- NEW SECTION: UPCOMING TARGETS ---
+        # --- NEW SECTION: UPCOMING TARGETS (SMART RECOMMENDATIONS) ---
         with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
             user_picks = get_all_user_picks(num_teams, user_spot, total_rounds)
             upcoming_picks = [p for p in user_picks if p >= st.session_state.current_pick][:3]
             
             if upcoming_picks:
                 st.write(f"Your next picks: **{', '.join(map(str, upcoming_picks))}**")
-                # Filter out everyone already drafted
+                st.write(f"Needs: {', '.join(missing_pos) if missing_pos else 'Bench/Depth'}")
                 available_for_targets = display_df[~display_df['ID'].isin(st.session_state.drafted)].copy()
                 
                 t_cols = st.columns(len(upcoming_picks))
                 for i, p_num in enumerate(upcoming_picks):
                     with t_cols[i]:
                         st.markdown(f"**Pick #{p_num} Targets:**")
-                        targets = available_for_targets.head(3)
-                        for idx, row in targets.iterrows():
-                            st.caption(f"Rank {row['Rank']}: {row['Name']} ({row['Positions']})")
+                        # Strategy: Look for Best Available that fits a missing position
+                        # If no missing pos, just show best available
+                        if missing_pos:
+                            rec_list = []
+                            for _, p in available_for_targets.iterrows():
+                                p_pos = [x.strip() for x in str(p['Positions']).split(',')]
+                                is_needed = any(mp in p_pos for mp in missing_pos) or \
+                                            (p['Type'] == "Pitchers" and "P" in missing_pos) or \
+                                            (p['Type'] == "Batters" and "Util" in missing_pos) or \
+                                            (any(pos in ["1B","2B","3B","SS"] for pos in p_pos) and "IF" in missing_pos)
+                                if is_needed:
+                                    rec_list.append(p)
+                                if len(rec_list) >= 3: break
+                            
+                            if not rec_list: # Fallback to top overall
+                                rec_list = available_for_targets.head(3).to_dict('records')
+                        else:
+                            rec_list = available_for_targets.head(3).to_dict('records')
+                        
+                        for p in rec_list:
+                            st.caption(f"Rank {p['Rank']}: {p['Name']} ({p['Positions']})")
             else:
                 st.info("No upcoming picks found or draft complete.")
 
@@ -251,45 +308,19 @@ if not main_df.empty:
 
     with c2:
         st.subheader("Your Roster Tracker")
-        roster_requirements = {
-            "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 3, "Util": 1,
-            "SP": 5, "RP": 2, "P": 1, "BN": 4
-        }
-        your_picks_ids = [p_id for i, p_id in enumerate(st.session_state.drafted) if get_current_drafter(i+1, num_teams) == user_spot]
-        your_roster_data = main_df[main_df['ID'].isin(your_picks_ids)].copy()
-        filled_slots = {k: [] for k in roster_requirements.keys()}
-        remaining_players = your_roster_data.to_dict('records')
         
-        # Slot Filling logic
-        for slot in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
-            for p in list(remaining_players):
-                p_pos = [x.strip() for x in str(p['Positions']).split(',')]
-                if slot in p_pos and len(filled_slots[slot]) < roster_requirements[slot]:
-                    filled_slots[slot].append(p['Name'])
-                    remaining_players.remove(p)
-        for p in list(remaining_players):
-            p_pos = [x.strip() for x in str(p['Positions']).split(',')]
-            if any(pos in ["1B", "2B", "3B", "SS"] for pos in p_pos) and len(filled_slots["IF"]) < roster_requirements["IF"]:
-                filled_slots["IF"].append(p['Name'])
-                remaining_players.remove(p)
-        for p in list(remaining_players):
-            if p['Type'] == "Pitchers" and len(filled_slots["P"]) < roster_requirements["P"]:
-                filled_slots["P"].append(p['Name'])
-                remaining_players.remove(p)
-        for p in list(remaining_players):
-            if p['Type'] == "Batters" and len(filled_slots["Util"]) < roster_requirements["Util"]:
-                filled_slots["Util"].append(p['Name'])
-                remaining_players.remove(p)
-        for p in list(remaining_players):
-            if len(filled_slots["BN"]) < roster_requirements["BN"]:
-                filled_slots["BN"].append(p['Name'])
-                remaining_players.remove(p)
+        # --- PROJECTED SCORE SECTION ---
+        total_projected_pts = sum([sum([p['FantasyPoints'] for p in list_of_players]) for list_of_players in filled_slots.values()])
+        st.metric("Total Projected Score", f"{total_projected_pts:,.0f} pts")
+        st.markdown("---")
 
         for slot, count in roster_requirements.items():
             current_fill = filled_slots[slot]
             for i in range(count):
-                player_name = current_fill[i] if i < len(current_fill) else "---"
-                st.write(f"{'✅' if player_name != '---' else '⬜'} **{slot}:** {player_name}")
+                player_data = current_fill[i] if i < len(current_fill) else None
+                player_name = player_data['Name'] if player_data else "---"
+                score_str = f" ({player_data['FantasyPoints']:.0f})" if player_data else ""
+                st.write(f"{'✅' if player_name != '---' else '⬜'} **{slot}:** {player_name}{score_str}")
 
         st.markdown("---")
         choice = st.selectbox("Select Player", [""] + filtered_df['ID'].tolist())
