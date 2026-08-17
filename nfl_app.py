@@ -78,6 +78,19 @@ with st.sidebar.expander("Misc/Turnovers"):
     weights['FL'] = st.number_input("Fumbles Lost", value=-2.0)
     weights['2PT'] = st.number_input("2PT Conversions", value=2.0)
 
+with st.sidebar.expander("Kicking"):
+    weights['XPT'] = st.number_input("PAT Made", value=1.0)
+    weights['FG'] = st.number_input("FG Made (Avg Value)", value=3.5, step=0.1, help="Since projections don't break down FG distance, use an average point value per FG (e.g., 3.5).")
+    weights['FGM'] = st.number_input("FG Missed", value=-1.0)
+
+with st.sidebar.expander("Defense / ST"):
+    weights['SACK'] = st.number_input("Sack", value=1.0)
+    weights['DEF_INT'] = st.number_input("Interception (DEF)", value=2.0)
+    weights['FR'] = st.number_input("Fumble Recovery", value=2.0)
+    weights['DEF_TD'] = st.number_input("Defensive / Return TD", value=6.0)
+    weights['SAFETY'] = st.number_input("Safety", value=2.0)
+    st.caption("Points/Yards Allowed are automatically scored using a per-game average approximation based on your brackets.")
+
 # --- Logic: Load Reference Map ---
 @st.cache_data
 def load_reference_map(filename):
@@ -119,6 +132,16 @@ def load_processed_data(filename, _weights, ref_filename):
         # Fix: Remove any accidental duplicate columns straight from the raw Excel file
         df = df.loc[:, ~df.columns.duplicated()]
 
+        # Data Prep: Handle Kicker Missed FGs
+        if 'FGA' in df.columns and 'FG' in df.columns:
+            df['FGM'] = pd.to_numeric(df['FGA'], errors='coerce').fillna(0) - pd.to_numeric(df['FG'], errors='coerce').fillna(0)
+            
+        # Data Prep: Handle Defensive column naming collisions based on exact user headers
+        if 'TD' in df.columns and 'DEF_TD' not in df.columns:
+            df = df.rename(columns={'TD': 'DEF_TD'})
+        if 'INT' in df.columns and 'INTS' in df.columns:
+            df = df.rename(columns={'INT': 'DEF_INT', 'INTS': 'INT'})
+
         pts = 0
         for stat, weight in _weights.items():
             # Handle variations in Excel column naming
@@ -135,13 +158,49 @@ def load_processed_data(filename, _weights, ref_filename):
 
             col = next((c for c in df.columns if c.upper() in aliases), None)
             if col:
-                # Fix: If our target name already exists (e.g. Defensive 'INT'), rename it out of the way
+                # We already renamed DEF_INT and DEF_TD, but keeping this as a safety net
                 if col != stat and stat in df.columns:
                     df = df.rename(columns={stat: f"DEF_{stat}"})
                 
                 df = df.rename(columns={col: stat}) # Rename to standard stat name for clean UI display
                 pts += pd.to_numeric(df[stat], errors='coerce').fillna(0) * weight
         
+        # Defense Bracket Scoring (Approximate per-game points based on season totals)
+        if 'PA' in df.columns and 'YDS_AGN' in df.columns:
+            def calc_bracket(row):
+                if row.get('Position', '') != 'DEF': return 0
+                pa = pd.to_numeric(row['PA'], errors='coerce')
+                yds = pd.to_numeric(row['YDS_AGN'], errors='coerce')
+                if pd.isna(pa) or pd.isna(yds): return 0
+                
+                pa_pg = pa / 17
+                yds_pg = yds / 17
+                
+                p_score = 0
+                if pa_pg <= 0.5: p_score = 5
+                elif pa_pg <= 6.5: p_score = 4
+                elif pa_pg <= 13.5: p_score = 3
+                elif pa_pg <= 17.5: p_score = 1
+                elif pa_pg <= 27.5: p_score = 0
+                elif pa_pg <= 34.5: p_score = -1
+                elif pa_pg <= 45.5: p_score = -3
+                else: p_score = -5
+                
+                y_score = 0
+                if yds_pg <= 99.5: y_score = 5
+                elif yds_pg <= 199.5: y_score = 3
+                elif yds_pg <= 299.5: y_score = 2
+                elif yds_pg <= 349.5: y_score = 0
+                elif yds_pg <= 399.5: y_score = -1
+                elif yds_pg <= 449.5: y_score = -3
+                elif yds_pg <= 499.5: y_score = -5
+                elif yds_pg <= 549.5: y_score = -6
+                else: y_score = -7
+                
+                return (p_score + y_score) * 17
+                
+            pts += df.apply(calc_bracket, axis=1)
+
         # Ensure K/DEF get their explicit projected points if they don't have standard offensive stats
         fp_col = next((c for c in df.columns if c.upper() in ['FPTS', 'FANTASY POINTS', 'PTS']), None)
         if fp_col:
