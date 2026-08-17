@@ -43,7 +43,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("🕹️ Mock Draft Simulator")
 num_teams = st.sidebar.number_input("League Size", 8, 16, 12)
 user_spot = st.sidebar.number_input("Your Draft Spot", 1, num_teams, 1)
-total_rounds = st.sidebar.number_input("Total Rounds (Roster Size)", 1, 30, 15)
+total_rounds = st.sidebar.number_input("Total Rounds (Roster Size)", 1, 30, 16)
 
 if not st.session_state.nfl_mock_active:
     if st.sidebar.button("🚀 Start Mock Draft"):
@@ -293,7 +293,7 @@ if not main_df.empty:
     
     # --- Roster Tracker Prep ---
     roster_requirements = {
-        "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DEF": 1, "BN": 6
+        "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DEF": 1, "BN": 7
     }
     your_picks_ids = [p_id for i, p_id in enumerate(st.session_state.nfl_drafted) if get_current_drafter(i+1, num_teams) == user_spot]
     your_roster_data = main_df[main_df['ID'].isin(your_picks_ids)].copy()
