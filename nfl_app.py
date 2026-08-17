@@ -84,7 +84,7 @@ def load_reference_map(filename):
     try:
         ref_df = pd.read_excel(filename)
         ref_df.columns = [str(c).strip() for c in ref_df.columns]
-        n_col = next((c for c in ref_df.columns if c.lower() == 'name'), None)
+        n_col = next((c for c in ref_df.columns if c.lower() in ['name', 'player']), None)
         p_col = next((c for c in ref_df.columns if c.lower() in ['position', 'pos']), None)
         if n_col and p_col:
             return {clean_name_string(str(row[n_col])): str(row[p_col]).strip() for _, row in ref_df.iterrows()}
@@ -99,7 +99,7 @@ def load_processed_data(filename, _weights, ref_filename):
         df.columns = [str(c).strip() for c in df.columns]
         
         pos_map = load_reference_map(ref_filename)
-        name_col = next((c for c in df.columns if c.lower() == 'name'), None)
+        name_col = next((c for c in df.columns if c.lower() in ['name', 'player']), None)
         if not name_col: return pd.DataFrame()
         df = df.rename(columns={name_col: 'Name'})
         
@@ -121,17 +121,19 @@ def load_processed_data(filename, _weights, ref_filename):
             # Handle variations in Excel column naming
             aliases = [stat.upper()]
             if stat == 'Pass Yds': aliases += ['PASS YARDS', 'PASSYDS']
-            if stat == 'Pass TD': aliases += ['PASS TDS', 'PASSTD']
+            if stat == 'Pass TD': aliases += ['PASS TDS', 'PASSTD', 'PASSTDS']
             if stat == 'Rush Yds': aliases += ['RUSH YARDS', 'RUSHYDS']
-            if stat == 'Rush TD': aliases += ['RUSH TDS', 'RUSHTD']
+            if stat == 'Rush TD': aliases += ['RUSH TDS', 'RUSHTD', 'RUSHTDS']
             if stat == 'Rec Yds': aliases += ['REC YARDS', 'RECYDS']
-            if stat == 'Rec TD': aliases += ['REC TDS', 'RECTD']
-            if stat == 'Rec': aliases += ['RECEPTIONS']
-            if stat == 'FL': aliases += ['FUM', 'FUMBLES LOST']
+            if stat == 'Rec TD': aliases += ['REC TDS', 'RECTD', 'RECTDS']
+            if stat == 'Rec': aliases += ['RECEPTIONS', 'REC']
+            if stat == 'INT': aliases += ['INTS', 'INT']
+            if stat == 'FL': aliases += ['FUM', 'FUMBLES LOST', 'FL']
 
             col = next((c for c in df.columns if c.upper() in aliases), None)
             if col:
-                pts += pd.to_numeric(df[col], errors='coerce').fillna(0) * weight
+                df = df.rename(columns={col: stat}) # Rename to standard stat name for clean UI display
+                pts += pd.to_numeric(df[stat], errors='coerce').fillna(0) * weight
         
         # Ensure K/DEF get their explicit projected points if they don't have standard offensive stats
         fp_col = next((c for c in df.columns if c.upper() in ['FPTS', 'FANTASY POINTS', 'PTS']), None)
