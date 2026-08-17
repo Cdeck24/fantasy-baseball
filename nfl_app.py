@@ -116,6 +116,9 @@ def load_processed_data(filename, _weights, ref_filename):
                 return 'FLEX'
             df['Position'] = df['Name'].apply(match_position)
 
+        # Fix: Remove any accidental duplicate columns straight from the raw Excel file
+        df = df.loc[:, ~df.columns.duplicated()]
+
         pts = 0
         for stat, weight in _weights.items():
             # Handle variations in Excel column naming
@@ -132,14 +135,22 @@ def load_processed_data(filename, _weights, ref_filename):
 
             col = next((c for c in df.columns if c.upper() in aliases), None)
             if col:
+                # Fix: If our target name already exists (e.g. Defensive 'INT'), rename it out of the way
+                if col != stat and stat in df.columns:
+                    df = df.rename(columns={stat: f"DEF_{stat}"})
+                
                 df = df.rename(columns={col: stat}) # Rename to standard stat name for clean UI display
                 pts += pd.to_numeric(df[stat], errors='coerce').fillna(0) * weight
         
         # Ensure K/DEF get their explicit projected points if they don't have standard offensive stats
         fp_col = next((c for c in df.columns if c.upper() in ['FPTS', 'FANTASY POINTS', 'PTS']), None)
         if fp_col:
+            # Safely handle the FPTS column math
             raw_pts = pd.to_numeric(df[fp_col], errors='coerce').fillna(0)
-            df['FantasyPoints'] = pts + raw_pts.where(pts == 0, 0) # Use formula, but fallback to provided FPTS for K/DEF
+            if isinstance(pts, int) and pts == 0:
+                df['FantasyPoints'] = raw_pts
+            else:
+                df['FantasyPoints'] = pts + raw_pts.where(pts == 0, 0)
         else:
             df['FantasyPoints'] = pts
             
