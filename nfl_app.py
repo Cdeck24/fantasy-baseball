@@ -15,6 +15,8 @@ if 'nfl_mock_active' not in st.session_state:
     st.session_state.nfl_mock_active = False
 if 'nfl_current_pick' not in st.session_state:
     st.session_state.nfl_current_pick = 1
+if 'nfl_draft_started' not in st.session_state:
+    st.session_state.nfl_draft_started = False
 
 # --- Helper: Robust Name Cleaning ---
 def clean_name_string(name):
@@ -46,22 +48,31 @@ num_teams = st.sidebar.number_input("League Size", 8, 16, 12)
 user_spot = st.sidebar.number_input("Your Draft Spot", 1, num_teams, 1)
 total_rounds = st.sidebar.number_input("Total Rounds (Roster Size)", 1, 30, 16) # Set to 16 based on roster config
 
-col1, col2 = st.sidebar.columns(2)
-if col1.button("🔴 Live Draft"):
-    st.session_state.nfl_drafted = []
-    st.session_state.nfl_current_pick = 1
-    st.session_state.nfl_mock_active = False
-    st.rerun()
-if col2.button("🚀 Mock Draft"):
-    st.session_state.nfl_drafted = []
-    st.session_state.nfl_current_pick = 1
-    st.session_state.nfl_mock_active = True
-    st.rerun()
-    
-if st.session_state.nfl_mock_active:
-    st.sidebar.success("🤖 Mock Draft Active")
+if not st.session_state.nfl_draft_started:
+    col1, col2 = st.sidebar.columns(2)
+    if col1.button("🔴 Start Live"):
+        st.session_state.nfl_drafted = []
+        st.session_state.nfl_current_pick = 1
+        st.session_state.nfl_mock_active = False
+        st.session_state.nfl_draft_started = True
+        st.rerun()
+    if col2.button("🚀 Start Mock"):
+        st.session_state.nfl_drafted = []
+        st.session_state.nfl_current_pick = 1
+        st.session_state.nfl_mock_active = True
+        st.session_state.nfl_draft_started = True
+        st.rerun()
 else:
-    st.sidebar.info("🔴 Live Draft Active")
+    if st.sidebar.button("🛑 Stop / Reset Draft"):
+        st.session_state.nfl_draft_started = False
+        st.session_state.nfl_drafted = []
+        st.session_state.nfl_current_pick = 1
+        st.rerun()
+        
+    if st.session_state.nfl_mock_active:
+        st.sidebar.success("🤖 Mock Draft Active")
+    else:
+        st.sidebar.info("🔴 Live Draft Active")
 
 # Scoring Weights
 weights = {}
@@ -245,8 +256,8 @@ if not main_df.empty:
     total_picks_possible = num_teams * total_rounds
     draft_complete = st.session_state.nfl_current_pick > total_picks_possible
 
-    # CPU Draft Logic (Only if Mock Draft is Active)
-    if st.session_state.nfl_mock_active and not draft_complete:
+    # CPU Draft Logic (Only if Mock Draft is Active and Draft is Started)
+    if st.session_state.nfl_draft_started and st.session_state.nfl_mock_active and not draft_complete:
         current_drafter = get_current_drafter(st.session_state.nfl_current_pick, num_teams)
         if current_drafter != user_spot:
             available = display_df[~display_df['ID'].isin(st.session_state.nfl_drafted)]
@@ -260,7 +271,9 @@ if not main_df.empty:
     # --- UI ---
     st.title(f"🏈 {data_year} NFL Draft Board")
     
-    if not draft_complete:
+    if not st.session_state.nfl_draft_started:
+        st.info("Draft has not started. Review the board, adjust your scoring settings, and click 'Start Live' or 'Start Mock' in the sidebar when ready.")
+    elif not draft_complete:
         round_display = ((st.session_state.nfl_current_pick - 1) // num_teams) + 1
         drafter = get_current_drafter(st.session_state.nfl_current_pick, num_teams)
         mode_str = "🤖 MOCK DRAFT" if st.session_state.nfl_mock_active else "🔴 LIVE DRAFT"
@@ -330,7 +343,7 @@ if not main_df.empty:
 
     with c1:
         # --- UPCOMING TARGETS ---
-        if not draft_complete:
+        if st.session_state.nfl_draft_started and not draft_complete:
             with st.expander("🎯 UPCOMING TARGETS & STRATEGY", expanded=True):
                 user_picks = get_all_user_picks(num_teams, view_team_idx, total_rounds)
                 upcoming_picks = [p for p in user_picks if p >= st.session_state.nfl_current_pick][:3]
@@ -402,12 +415,18 @@ if not main_df.empty:
         st.markdown("---")
         choice = st.selectbox("Select Player", [""] + filtered_df['ID'].tolist())
         
-        can_draft = not draft_complete
+        can_draft = st.session_state.nfl_draft_started and not draft_complete
         # In mock draft, disable drafting for AI teams. In live draft, allow it for all.
-        if st.session_state.nfl_mock_active and current_on_clock != user_spot:
+        if st.session_state.nfl_draft_started and st.session_state.nfl_mock_active and current_on_clock != user_spot:
             can_draft = False
         
-        button_text = f"Draft to Team {current_on_clock}" if not draft_complete else "Drafting Complete"
+        if not st.session_state.nfl_draft_started:
+            button_text = "Drafting Paused"
+        elif not draft_complete:
+            button_text = f"Draft to Team {current_on_clock}"
+        else:
+            button_text = "Drafting Complete"
+            
         if st.button(button_text, disabled=not can_draft, use_container_width=True) and choice != "":
             st.session_state.nfl_drafted.append(choice)
             st.session_state.nfl_current_pick += 1
@@ -419,6 +438,7 @@ if not main_df.empty:
             st.rerun()
             
         if st.button("Reset Draft", use_container_width=True):
+            st.session_state.nfl_draft_started = False
             st.session_state.nfl_drafted = []
             st.session_state.nfl_current_pick = 1
             st.rerun()
